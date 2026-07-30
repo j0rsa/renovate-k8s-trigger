@@ -9,6 +9,7 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+  BIN_NAME: renovate-k8s-trigger
 
 jobs:
   # ── Lint ────────────────────────────────────────────────────────────────────
@@ -27,12 +28,14 @@ jobs:
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
+        with:
+          key: lint
 
       - name: Check formatting
         run: cargo fmt --check
 
       - name: Clippy
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --locked -- -D warnings
 
   # ── Test ────────────────────────────────────────────────────────────────────
   test:
@@ -48,30 +51,110 @@ jobs:
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
+        with:
+          key: test
 
       - name: Run tests
-        run: cargo test
+        run: cargo test --locked
 
-  # ── Docker build & push ─────────────────────────────────────────────────────
-  docker:
-    name: Docker (amd64 / arm64)
+  # ── Native release builds (no QEMU) ─────────────────────────────────────────
+  build-amd64:
+    name: Build amd64
     needs: [lint, test]
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
-
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      - name: Install musl tools
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: amd64
+
+      - name: Build release binary
+        run: cargo build --release --locked --target x86_64-unknown-linux-musl
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-amd64
+          path: target/x86_64-unknown-linux-musl/release/${{ env.BIN_NAME }}
+          retention-days: 1
+
+  build-arm64:
+    name: Build arm64
+    needs: [lint, test]
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-musl
+
+      - name: Install musl tools
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: arm64
+
+      - name: Build release binary
+        run: cargo build --release --locked --target aarch64-unknown-linux-musl
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-arm64
+          path: target/aarch64-unknown-linux-musl/release/${{ env.BIN_NAME }}
+          retention-days: 1
+
+  # ── Thin multi-arch image from prebuilt binaries ────────────────────────────
+  # PRs: build both platforms into a local OCI archive (no registry push).
+  # main push: build and push to GHCR.
+  docker:
+    name: Docker multiarch image
+    needs: [build-amd64, build-arm64]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download amd64 binary
+        uses: actions/download-artifact@v4
+        with:
+          name: binary-amd64
+          path: dist/amd64
+
+      - name: Download arm64 binary
+        uses: actions/download-artifact@v4
+        with:
+          name: binary-arm64
+          path: dist/arm64
+
+      - name: Make binaries executable
+        run: chmod +x dist/amd64/${{ env.BIN_NAME }} dist/arm64/${{ env.BIN_NAME }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to GHCR
-        if: github.event_name != 'pull_request'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -90,12 +173,27 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=sha
 
-      - name: Build and push
+      # Multi-arch requires an explicit output when not pushing (docker-container driver).
+      - name: Build multiarch image (no push)
+        if: github.event_name != 'push' || github.ref != 'refs/heads/main'
         uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
+          push: false
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=oci,dest=/tmp/renovate-k8s-trigger.oci.tar
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push multiarch image
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
