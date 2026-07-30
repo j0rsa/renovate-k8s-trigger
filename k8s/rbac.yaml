@@ -1,0 +1,43 @@
+# ServiceAccount used by the trigger pod
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: renovate-k8s-trigger
+  namespace: renovate-trigger
+  labels:
+    app: renovate-k8s-trigger
+---
+# Role granting the minimum permissions required:
+#   - read the target CronJob
+#   - create Jobs
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: renovate-k8s-trigger
+  namespace: renovate-trigger
+  labels:
+    app: renovate-k8s-trigger
+rules:
+  - apiGroups: ["batch"]
+    resources: ["cronjobs"]
+    verbs: ["get"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create"]
+---
+# Bind the role to the service account
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: renovate-k8s-trigger
+  namespace: renovate-trigger
+  labels:
+    app: renovate-k8s-trigger
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: renovate-k8s-trigger
+subjects:
+  - kind: ServiceAccount
+    name: renovate-k8s-trigger
+    namespace: renovate-trigger
