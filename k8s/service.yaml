@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: renovate-k8s-trigger
+  namespace: renovate-trigger
+  labels:
+    app: renovate-k8s-trigger
+spec:
+  type: ClusterIP
+  selector:
+    app: renovate-k8s-trigger
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP

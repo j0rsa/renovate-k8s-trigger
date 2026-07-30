@@ -1,0 +1,28 @@
+# Example Ingress using the nginx ingress controller.
+# Replace <your-domain> with the hostname you want to expose.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: renovate-k8s-trigger
+  namespace: renovate-trigger
+  labels:
+    app: renovate-k8s-trigger
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: renovate-trigger.example.com   # replace with your domain
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: renovate-k8s-trigger
+                port:
+                  name: http
+  tls:
+    - hosts:
+        - renovate-trigger.example.com     # replace with your domain
+      secretName: renovate-k8s-trigger-tls
