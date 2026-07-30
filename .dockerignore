@@ -1,5 +1,3 @@
-target/
-.git/
-.github/
-k8s/
-*.md
+*
+!dist/
+!dist/**/*

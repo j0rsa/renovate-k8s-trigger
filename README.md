@@ -110,10 +110,20 @@ jobs:
 
 ## Docker image
 
-Multi-arch images (`linux/amd64`, `linux/arm64`) are built and pushed to GHCR by the CI pipeline on every push to `main`:
+Multi-arch images (`linux/amd64`, `linux/arm64`) are built and pushed to GHCR by the CI pipeline. Rust binaries are compiled **natively** on amd64 and arm64 runners (static musl), then copied into a thin `distroless/static` image — no QEMU, no in-image Rust compile.
 
 ```
 ghcr.io/j0rsa/renovate-k8s-trigger:main
+```
+
+To build the image locally after producing binaries:
+
+```bash
+mkdir -p dist/amd64 dist/arm64
+cargo build --release --target x86_64-unknown-linux-musl
+cp target/x86_64-unknown-linux-musl/release/renovate-k8s-trigger dist/amd64/
+# on arm64 (or cross-compile) place the aarch64 musl binary in dist/arm64/
+docker buildx build --platform linux/amd64 -t renovate-k8s-trigger:local .
 ```
 
 ## Local development
@@ -131,4 +141,5 @@ The GitHub Actions workflow (`.github/workflows/ci.yml`) runs:
 
 1. **Lint** — `cargo fmt --check` + `cargo clippy`
 2. **Test** — `cargo test`
-3. **Docker** — multi-arch build (`linux/amd64`, `linux/arm64`) and push to GHCR (on `main` branch only)
+3. **Build amd64 / arm64** — native `cargo build --release` for musl targets (parallel)
+4. **Docker** — thin multi-arch image from prebuilt binaries (build-only on PRs; push to GHCR on `main`)
