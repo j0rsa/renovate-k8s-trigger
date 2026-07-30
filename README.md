@@ -178,13 +178,22 @@ Jobs are built like `kubectl create job --from=cronjob/…`: fresh metadata, `cr
 
 ## Container image
 
-Multi-arch (`linux/amd64`, `linux/arm64`) images are published to GHCR on pushes to `main`:
+The image version is the **`version` in `Cargo.toml`**. On every push to `main`, CI publishes multi-arch (`linux/amd64`, `linux/arm64`) tags to GHCR:
+
+| Tag | Meaning |
+|-----|---------|
+| `v0.1.0` | Exact release from `Cargo.toml` (pin this in manifests) |
+| `latest` | Same image as the newest main publish |
+| `sha-<short>` | Immutable build fingerprint |
 
 ```text
-ghcr.io/j0rsa/renovate-k8s-trigger:main
+ghcr.io/j0rsa/renovate-k8s-trigger:v0.1.0
+ghcr.io/j0rsa/renovate-k8s-trigger:latest
 ```
 
-CI compiles static musl binaries on native amd64 and arm64 runners, then packs a thin `distroless` image (no QEMU). Pull requests build the image to verify the pipeline but do not push.
+Bump `version` in `Cargo.toml` before merging to `main` — CI refuses to republish an existing `v*` tag. Pull requests build the image to verify the pipeline but do not push.
+
+CI compiles static musl binaries on native amd64 and arm64 runners, then packs a thin `distroless` image (no QEMU).
 
 ---
 

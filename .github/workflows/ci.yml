@@ -12,10 +12,48 @@ env:
   BIN_NAME: renovate-k8s-trigger
 
 jobs:
+  # ── Version guard (main push only) ──────────────────────────────────────────
+  # Cargo.toml version drives GHCR tags (vX.Y.Z). Refuse to republish an existing tag.
+  version-check:
+    name: Version check
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    permissions:
+      packages: read
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version from Cargo.toml
+        id: ver
+        run: |
+          VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Detected version: v${VERSION}"
+
+      - name: Check tag does not already exist in GHCR
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          REPO=$(echo "${{ github.repository }}" | cut -d'/' -f2 | tr '[:upper:]' '[:lower:]')
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            "https://ghcr.io/v2/${OWNER}/${REPO}/manifests/v${VERSION}")
+          if [ "$STATUS" = "200" ]; then
+            echo "::error::Tag v${VERSION} already exists in GHCR. Bump the version in Cargo.toml before merging."
+            exit 1
+          fi
+          echo "Tag v${VERSION} is free — proceeding."
+
   # ── Lint ────────────────────────────────────────────────────────────────────
   lint:
     name: Lint
     runs-on: ubuntu-latest
+    needs: version-check
+    if: always() && !failure() && !cancelled()
     permissions:
       contents: read
     steps:
@@ -41,6 +79,8 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
+    needs: version-check
+    if: always() && !failure() && !cancelled()
     permissions:
       contents: read
     steps:
@@ -61,6 +101,7 @@ jobs:
   build-amd64:
     name: Build amd64
     needs: [lint, test]
+    if: always() && needs.lint.result == 'success' && needs.test.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -93,6 +134,7 @@ jobs:
   build-arm64:
     name: Build arm64
     needs: [lint, test]
+    if: always() && needs.lint.result == 'success' && needs.test.result == 'success'
     runs-on: ubuntu-24.04-arm
     permissions:
       contents: read
@@ -123,17 +165,30 @@ jobs:
           retention-days: 1
 
   # ── Thin multi-arch image from prebuilt binaries ────────────────────────────
-  # PRs: build both platforms into a local OCI archive (no registry push).
-  # main push: build and push to GHCR.
+  # Tags come from Cargo.toml version (petmon-style):
+  #   main push → vX.Y.Z, sha-<short>, latest
+  #   PR        → pr-<n>-<version>-<sha> (build only, no push)
   docker:
     name: Docker multiarch image
-    needs: [build-amd64, build-arm64]
+    needs: [build-amd64, build-arm64, version-check]
+    if: |
+      always() &&
+      needs.build-amd64.result == 'success' &&
+      needs.build-arm64.result == 'success' &&
+      !cancelled()
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v4
+
+      - name: Extract app version
+        id: ver
+        run: |
+          VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Detected version: ${VERSION}"
 
       - name: Download amd64 binary
         uses: actions/download-artifact@v4
@@ -161,17 +216,39 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract Docker metadata
+      # Local tag generation avoids docker/metadata-action GitHub API calls,
+      # which fail hard on transient 503 unicorn responses.
+      - name: Extract metadata
         id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=ref,event=branch
-            type=ref,event=pr
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=sha
+        run: |
+          set -euo pipefail
+          IMAGE="${REGISTRY}/${IMAGE_NAME}"
+          # GHCR requires lowercase image names
+          IMAGE=$(echo "$IMAGE" | tr '[:upper:]' '[:lower:]')
+          VERSION="${{ steps.ver.outputs.version }}"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            SHORT_SHA="$(printf '%.7s' '${{ github.event.pull_request.head.sha }}')"
+          else
+            SHORT_SHA="$(printf '%.7s' '${{ github.sha }}')"
+          fi
+
+          TAGS=()
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            TAGS+=("${IMAGE}:pr-${{ github.event.pull_request.number }}-${VERSION}-${SHORT_SHA}")
+          elif [ "${{ github.ref }}" = "refs/heads/main" ] && [ "${{ github.event_name }}" = "push" ]; then
+            TAGS+=("${IMAGE}:v${VERSION}")
+            TAGS+=("${IMAGE}:sha-${SHORT_SHA}")
+            TAGS+=("${IMAGE}:latest")
+          fi
+
+          {
+            echo "tags<<EOF"
+            printf '%s\n' "${TAGS[@]}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Image tags:"
+          printf '  %s\n' "${TAGS[@]}"
 
       # Multi-arch requires an explicit output when not pushing (docker-container driver).
       - name: Build multiarch image (no push)
@@ -182,7 +259,6 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: false
           tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
           outputs: type=oci,dest=/tmp/renovate-k8s-trigger.oci.tar
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -195,6 +271,5 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

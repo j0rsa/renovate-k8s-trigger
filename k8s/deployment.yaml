@@ -34,7 +34,9 @@ spec:
         runAsGroup: 65534
       containers:
         - name: renovate-k8s-trigger
-          image: ghcr.io/j0rsa/renovate-k8s-trigger:main
+          # Pin to the Cargo.toml version tag published by CI (also available as :latest).
+          # Bump with Cargo.toml / let Renovate open the PR.
+          image: ghcr.io/j0rsa/renovate-k8s-trigger:v0.1.0
           imagePullPolicy: Always
           ports:
             - name: http
