@@ -54,6 +54,10 @@ spec:
                   fieldPath: metadata.namespace
             - name: RUST_LOG
               value: "info"
+            # TTL for finished manual Jobs (CronJob history limits do not apply to these).
+            # Set empty to leave TTL unset unless the CronJob template already defines one.
+            - name: JOB_TTL_SECONDS
+              value: "86400"
           livenessProbe:
             httpGet:
               path: /health

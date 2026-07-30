@@ -27,13 +27,16 @@ curl -H "X-Api-Key: <API_SECRET>" https://trigger.example.com/trigger
 
 ## Environment Variables
 
-| Variable       | Required | Default   | Description                          |
-|----------------|----------|-----------|--------------------------------------|
-| `API_SECRET`   | ✅       | —         | Secret token for authentication      |
-| `CRON_JOB_NAME`| ✅       | —         | Name of the CronJob to instantiate   |
-| `NAMESPACE`    | ❌       | `default` | Kubernetes namespace (auto-injected via Downward API in the k8s manifests) |
-| `PORT`         | ❌       | `8080`    | HTTP listen port                     |
-| `RUST_LOG`     | ❌       | `info`    | Log level filter                     |
+| Variable         | Required | Default   | Description                          |
+|------------------|----------|-----------|--------------------------------------|
+| `API_SECRET`     | ✅       | —         | Secret token for authentication      |
+| `CRON_JOB_NAME`  | ✅       | —         | Name of the CronJob to instantiate   |
+| `NAMESPACE`      | ❌       | `default` | Kubernetes namespace (auto-injected via Downward API in the k8s manifests) |
+| `PORT`           | ❌       | `8080`    | HTTP listen port                     |
+| `JOB_TTL_SECONDS`| ❌       | `86400`   | TTL after finish for new Jobs when the CronJob template omits one; empty disables |
+| `RUST_LOG`       | ❌       | `info`    | Log level filter                     |
+
+`/trigger` creates a Job from the CronJob template (same idea as `kubectl create job --from=cronjob/...`). If a previous manual Job for that CronJob is still active, the API returns **409** with `"status":"throttled"` instead of starting another.
 
 ## Kubernetes deployment
 
