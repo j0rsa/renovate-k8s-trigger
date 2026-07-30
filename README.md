@@ -1,0 +1,1 @@
+# renovate-k8s-trigger
